@@ -58,12 +58,12 @@ with tab1:
         color = "#1a9641" if val > 0 else "#d7191c"
         return f"color: {color}; font-weight: bold"
 
-    styled = returns_df.style.applymap(color_returns, subset=["1D", "1W", "1M", "3M"]).format("{:.2f}%", na_rep="—")
+    styled = returns_df.style.map(color_returns, subset=["1D", "1W", "1M", "3M"]).format("{:.2f}%", na_rep="—")
     st.dataframe(styled, use_container_width=True)
 
     st.markdown("**Benchmark (SPY)**")
     st.dataframe(
-        spy_returns.style.applymap(color_returns, subset=["1D", "1W", "1M", "3M"]).format("{:.2f}%", na_rep="—"),
+        spy_returns.style.map(color_returns, subset=["1D", "1W", "1M", "3M"]).format("{:.2f}%", na_rep="—"),
         use_container_width=True,
     )
 
@@ -138,7 +138,7 @@ with tab3:
         factor_returns_df = compute_returns(prices, factor_tickers)
         factor_returns_df.index = [f"{FACTOR_PROXIES.get(t, t)} ({t})" for t in factor_returns_df.index]
         st.dataframe(
-            factor_returns_df.style.applymap(
+            factor_returns_df.style.map(
                 lambda v: f"color: {'#1a9641' if v > 0 else '#d7191c'}; font-weight: bold" if pd.notna(v) else "",
                 subset=["1D", "1W", "1M", "3M"],
             ).format("{:.2f}%", na_rep="—"),
@@ -167,7 +167,7 @@ with tab4:
                 return "background-color: #f8d7da; color: #721c24; font-weight: bold"
             return ""
 
-        styled_disl = dislocations.style.applymap(highlight_signal, subset=["Signal"]).format(
+        styled_disl = dislocations.style.map(highlight_signal, subset=["Signal"]).format(
             {
                 "Factor 5D Move": "{:.2f}%",
                 "Stock 5D Return": "{:.2f}%",

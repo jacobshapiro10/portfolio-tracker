@@ -19,9 +19,10 @@ with st.sidebar:
     factor_window = st.slider("Factor regression window (trading days)", 20, 252, 60)
     dislocation_threshold = st.slider("Dislocation threshold (%)", 1, 10, 3) / 100
 
-    run = st.button("Run Analysis", type="primary", use_container_width=True)
+    if st.button("Run Analysis", type="primary", use_container_width=True):
+        st.session_state["run"] = True
 
-if not run:
+if not st.session_state.get("run"):
     st.info("Enter your tickers in the sidebar and click **Run Analysis**.")
     st.stop()
 

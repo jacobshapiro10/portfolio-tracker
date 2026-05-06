@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from data import fetch_prices, compute_returns, get_sector_info, FACTOR_PROXIES
+from data import fetch_prices, compute_returns, get_sector_info, FACTOR_PROXIES, STYLE_FACTOR_PROXIES
 from factors import compute_factor_betas, detect_dislocations
 
 st.set_page_config(page_title="Portfolio Attribution", layout="wide")
@@ -16,7 +16,7 @@ with st.sidebar:
     raw_input = st.text_area("Enter tickers (comma-separated)", value=default_tickers, height=120)
     tickers = [t.strip().upper() for t in raw_input.split(",") if t.strip()]
 
-    factor_window = st.slider("Factor regression window (trading days)", 20, 120, 60)
+    factor_window = st.slider("Factor regression window (trading days)", 20, 252, 60)
     dislocation_threshold = st.slider("Dislocation threshold (%)", 1, 10, 3) / 100
 
     run = st.button("Run Analysis", type="primary", use_container_width=True)
@@ -106,18 +106,49 @@ with tab2:
 # ============================================================
 with tab3:
     st.subheader("Factor Betas")
-    st.caption(
-        f"OLS regression of daily returns vs factor proxies over trailing {factor_window} trading days. "
-        "Factor proxies: " + ", ".join(f"{k} ({v})" for k, v in FACTOR_PROXIES.items())
-    )
-    with st.spinner("Running regressions..."):
-        betas_df = compute_factor_betas(prices, available, window=factor_window)
 
-    if betas_df.empty:
+    with st.expander("Methodology"):
+        st.markdown(
+            f"""
+**How betas are estimated:** OLS regression of each stock's daily returns against all factor
+returns over the trailing **{factor_window} trading days**.  A raw beta of 0.85 on Rates/Duration
+means the stock is expected to move +0.85% for every +1% move in TLT.
+
+**Why raw betas are hard to compare across factors:** Each factor has a different daily volatility
+(TLT might move ±0.4%/day; Momentum ±0.15%/day).  A large beta on a low-vol factor may have less
+real-world impact than a small beta on a high-vol factor.
+
+**Standardized betas** fix this: β_std = β_raw × (σ_factor / σ_stock).  They measure the stock's
+response to a **1 standard-deviation move** in each factor, expressed in stock standard-deviation
+units — so columns are directly comparable.
+
+**Macro factors** use single-ETF daily returns (TLT, USO, UUP, HYG, IWM).
+**Style factors** use market-neutral long-short returns (e.g. Growth = IWF daily return − SPY daily
+return) so the market component is stripped out and you're measuring pure style tilt.
+
+**Data source:** Yahoo Finance via `yfinance` — free, daily OHLCV, available for decades.
+The fetch window is 1 year; increasing the regression window (sidebar slider, up to 252 days / 1 year)
+gives more data points per regression and tends to raise R².
+"""
+        )
+
+    show_std = st.toggle("Standardized betas (β × σ_factor / σ_stock)", value=False)
+
+    with st.spinner("Running regressions..."):
+        betas_raw, betas_std = compute_factor_betas(prices, available, window=factor_window)
+
+    if betas_raw.empty:
         st.warning("Not enough data to compute factor betas.")
     else:
+        betas_df = betas_std if show_std else betas_raw
         factor_cols = [c for c in betas_df.columns if c != "R²"]
-        styled_betas = betas_df.style.background_gradient(subset=factor_cols, cmap="RdYlGn", vmin=-1.5, vmax=1.5).format("{:.3f}")
+
+        vmin, vmax = (-1.0, 1.0) if show_std else (-1.5, 1.5)
+        styled_betas = (
+            betas_df.style
+            .background_gradient(subset=factor_cols, cmap="RdYlGn", vmin=vmin, vmax=vmax)
+            .format("{:.3f}")
+        )
         st.dataframe(styled_betas, use_container_width=True)
 
         st.subheader("Heatmap")
@@ -133,17 +164,40 @@ with tab3:
         fig_heat.update_layout(height=max(300, 60 * len(betas_df)), margin=dict(l=80, r=20, t=40, b=40))
         st.plotly_chart(fig_heat, use_container_width=True)
 
-        st.subheader("Factor Proxy Performance")
-        factor_tickers = list(FACTOR_PROXIES.values())
-        factor_returns_df = compute_returns(prices, factor_tickers)
-        factor_returns_df.index = [f"{FACTOR_PROXIES.get(t, t)} ({t})" for t in factor_returns_df.index]
+        st.subheader("Macro Factor Proxy Performance")
+        macro_tickers = list(FACTOR_PROXIES.values())
+        macro_ret_df = compute_returns(prices, macro_tickers)
+        macro_ret_df.index = [f"{FACTOR_PROXIES.get(t, t)} ({t})" for t in macro_ret_df.index]
         st.dataframe(
-            factor_returns_df.style.map(
+            macro_ret_df.style.map(
                 lambda v: f"color: {'#1a9641' if v > 0 else '#d7191c'}; font-weight: bold" if pd.notna(v) else "",
                 subset=["1D", "1W", "1M", "3M"],
             ).format("{:.2f}%", na_rep="—"),
             use_container_width=True,
         )
+
+        st.subheader("Style Factor Performance (Long Leg vs SPY)")
+        style_rows = []
+        for name, (long_etf, short_etf) in STYLE_FACTOR_PROXIES.items():
+            long_ret = compute_returns(prices, [long_etf])
+            spy_ret = compute_returns(prices, [short_etf])
+            if long_etf not in long_ret.index or short_etf not in spy_ret.index:
+                continue
+            row = {"Factor": f"{name} ({long_etf}/{short_etf})"}
+            for period in ["1D", "1W", "1M", "3M"]:
+                l = long_ret.loc[long_etf, period]
+                s = spy_ret.loc[short_etf, period]
+                row[period] = round(l - s, 2) if pd.notna(l) and pd.notna(s) else None
+            style_rows.append(row)
+        if style_rows:
+            style_perf_df = pd.DataFrame(style_rows).set_index("Factor")
+            st.dataframe(
+                style_perf_df.style.map(
+                    lambda v: f"color: {'#1a9641' if v > 0 else '#d7191c'}; font-weight: bold" if pd.notna(v) else "",
+                    subset=["1D", "1W", "1M", "3M"],
+                ).format("{:.2f}%", na_rep="—"),
+                use_container_width=True,
+            )
 
 # ============================================================
 # TAB 4: Dislocations

@@ -10,6 +10,17 @@ FACTOR_PROXIES = {
     "Small Cap / Cyclicality": "IWM",
 }
 
+# Style factors: each is (long leg, benchmark). Daily return = long - benchmark,
+# giving a market-neutral factor return for each style tilt.
+STYLE_FACTOR_PROXIES = {
+    "Growth": ("IWF", "SPY"),
+    "Value": ("IWD", "SPY"),
+    "Momentum": ("MTUM", "SPY"),
+    "Small-Cap": ("IJR", "SPY"),
+    "Low Volatility": ("USMV", "SPY"),
+    "High Dividend Yield": ("VYM", "SPY"),
+}
+
 SECTOR_ETFS = {
     "XLK": "Technology",
     "XLF": "Financials",
@@ -25,8 +36,9 @@ SECTOR_ETFS = {
 }
 
 
-def fetch_prices(tickers: list[str], period_days: int = 180) -> pd.DataFrame:
-    all_tickers = list(set(tickers + list(FACTOR_PROXIES.values()) + list(SECTOR_ETFS.keys()) + ["SPY"]))
+def fetch_prices(tickers: list[str], period_days: int = 365) -> pd.DataFrame:
+    style_etfs = [etf for pair in STYLE_FACTOR_PROXIES.values() for etf in pair]
+    all_tickers = list(set(tickers + list(FACTOR_PROXIES.values()) + list(SECTOR_ETFS.keys()) + style_etfs + ["SPY"]))
     start = datetime.today() - timedelta(days=period_days)
     raw = yf.download(all_tickers, start=start.strftime("%Y-%m-%d"), auto_adjust=True, progress=False)
     if isinstance(raw.columns, pd.MultiIndex):

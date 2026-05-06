@@ -1,3 +1,4 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
@@ -16,6 +17,7 @@ def _build_factor_returns(daily: pd.DataFrame, window: int) -> pd.DataFrame:
     return factor_df.tail(window)
 
 
+@st.cache_data
 def compute_factor_betas(
     prices: pd.DataFrame, tickers: list[str], window: int = 60
 ) -> tuple[pd.DataFrame, pd.DataFrame]:

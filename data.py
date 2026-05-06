@@ -1,3 +1,4 @@
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
@@ -36,6 +37,7 @@ SECTOR_ETFS = {
 }
 
 
+@st.cache_data(ttl=3600)
 def fetch_prices(tickers: list[str], period_days: int = 365) -> pd.DataFrame:
     style_etfs = [etf for pair in STYLE_FACTOR_PROXIES.values() for etf in pair]
     all_tickers = list(set(tickers + list(FACTOR_PROXIES.values()) + list(SECTOR_ETFS.keys()) + style_etfs + ["SPY"]))
@@ -68,6 +70,7 @@ def compute_returns(prices: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("Ticker")
 
 
+@st.cache_data(ttl=86400)
 def get_sector_info(tickers: list[str]) -> pd.DataFrame:
     rows = []
     for ticker in tickers:

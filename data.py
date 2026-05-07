@@ -1,46 +1,16 @@
 import streamlit as st
+import requests
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
-FACTOR_PROXIES = {
-    "Rates/Duration": "TLT",
-    "Oil/Commodities": "USO",
-    "USD Strength": "UUP",
-    "Risk Appetite": "HYG",
-    "Small Cap / Cyclicality": "IWM",
-}
-
-# Style factors: each is (long leg, benchmark). Daily return = long - benchmark,
-# giving a market-neutral factor return for each style tilt.
-STYLE_FACTOR_PROXIES = {
-    "Growth": ("IWF", "SPY"),
-    "Value": ("IWD", "SPY"),
-    "Momentum": ("MTUM", "SPY"),
-    "Small-Cap": ("IJR", "SPY"),
-    "Low Volatility": ("USMV", "SPY"),
-    "High Dividend Yield": ("VYM", "SPY"),
-}
-
-SECTOR_ETFS = {
-    "XLK": "Technology",
-    "XLF": "Financials",
-    "XLE": "Energy",
-    "XLV": "Healthcare",
-    "XLI": "Industrials",
-    "XLY": "Consumer Disc.",
-    "XLP": "Consumer Staples",
-    "XLU": "Utilities",
-    "XLRE": "Real Estate",
-    "XLB": "Materials",
-    "XLC": "Comm. Services",
-}
+FACTORSTODAY_BASE = "https://www.factorstoday.com/api"
 
 
 @st.cache_data(ttl=3600)
 def fetch_prices(tickers: list[str], period_days: int = 365) -> pd.DataFrame:
-    style_etfs = [etf for pair in STYLE_FACTOR_PROXIES.values() for etf in pair]
-    all_tickers = list(set(tickers + list(FACTOR_PROXIES.values()) + list(SECTOR_ETFS.keys()) + style_etfs + ["SPY"]))
+    all_tickers = list(set(tickers + ["SPY"]))
     start = datetime.today() - timedelta(days=period_days)
     raw = yf.download(all_tickers, start=start.strftime("%Y-%m-%d"), auto_adjust=True, progress=False)
     if isinstance(raw.columns, pd.MultiIndex):
@@ -48,8 +18,24 @@ def fetch_prices(tickers: list[str], period_days: int = 365) -> pd.DataFrame:
     else:
         prices = raw[["Close"]]
         prices.columns = all_tickers
-    prices = prices.dropna(how="all")
-    return prices
+    return prices.dropna(how="all")
+
+
+@st.cache_data(ttl=86400)
+def get_sector_info(tickers: list[str]) -> pd.DataFrame:
+    rows = []
+    for ticker in tickers:
+        try:
+            info = yf.Ticker(ticker).info
+            rows.append({
+                "Ticker": ticker,
+                "Sector": info.get("sector", "Unknown"),
+                "Industry": info.get("industry", "Unknown"),
+                "Market Cap": info.get("marketCap"),
+            })
+        except Exception:
+            rows.append({"Ticker": ticker, "Sector": "Unknown", "Industry": "Unknown", "Market Cap": None})
+    return pd.DataFrame(rows).set_index("Ticker")
 
 
 def compute_returns(prices: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
@@ -70,18 +56,57 @@ def compute_returns(prices: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("Ticker")
 
 
+@st.cache_data(ttl=3600)
+def fetch_portfolio_exposures(holdings_tuple: tuple, model: str = "Base + Sector") -> dict:
+    holdings = [{"ticker": t, "shares": s} for t, s in holdings_tuple]
+    resp = requests.post(
+        f"{FACTORSTODAY_BASE}/portfolio/analyze",
+        params={"model": model},
+        json={"holdings": holdings},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+@st.cache_data(ttl=3600)
+def fetch_factor_returns() -> dict:
+    resp = requests.get(f"{FACTORSTODAY_BASE}/factor-returns/historic", timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+@st.cache_data(ttl=60)
+def fetch_factor_returns_intraday() -> dict:
+    resp = requests.get(f"{FACTORSTODAY_BASE}/factor-returns/intraday", timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+@st.cache_data(ttl=3600)
+def fetch_factor_covariance(window: int = 252) -> dict:
+    resp = requests.get(
+        f"{FACTORSTODAY_BASE}/factor-covariance",
+        params={"window": window, "annualized": "true"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 @st.cache_data(ttl=86400)
-def get_sector_info(tickers: list[str]) -> pd.DataFrame:
-    rows = []
-    for ticker in tickers:
-        try:
-            info = yf.Ticker(ticker).info
-            rows.append({
-                "Ticker": ticker,
-                "Sector": info.get("sector", "Unknown"),
-                "Industry": info.get("industry", "Unknown"),
-                "Market Cap": info.get("marketCap"),
-            })
-        except Exception:
-            rows.append({"Ticker": ticker, "Sector": "Unknown", "Industry": "Unknown", "Market Cap": None})
-    return pd.DataFrame(rows).set_index("Ticker")
+def fetch_stock_specific_vol(ticker: str) -> dict:
+    resp = requests.get(f"{FACTORSTODAY_BASE}/stock-specific-vol/{ticker}", timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+@st.cache_data(ttl=3600)
+def fetch_factor_history(factor_id: str, days: int = 252) -> list:
+    resp = requests.get(
+        f"{FACTORSTODAY_BASE}/factor-history/{quote(factor_id)}",
+        params={"days": days},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()

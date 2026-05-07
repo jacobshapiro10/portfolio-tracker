@@ -45,13 +45,6 @@ with st.sidebar:
 
     tickers = list(holdings.keys())
 
-    model = st.selectbox(
-        "Factor model",
-        ["Base", "Base + Sector", "Base + Sector + Industry"],
-        index=1,
-        help="More factors = higher R², but noisier on small portfolios.",
-    )
-
     if st.button("Run Analysis", type="primary", use_container_width=True):
         st.session_state["run"] = True
 
@@ -144,7 +137,7 @@ with tab3:
     st.subheader("Portfolio Factor Exposures vs Benchmark")
     with st.spinner("Loading factor exposures..."):
         try:
-            port_data = fetch_portfolio_exposures(holdings_tuple, model=model)
+            port_data = fetch_portfolio_exposures(holdings_tuple)
         except Exception as e:
             st.error(f"Could not load factor exposures: {e}")
             st.stop()
@@ -153,9 +146,9 @@ with tab3:
     total_val = port_data.get("totalValue", 0)
 
     c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     c1.metric("Portfolio Value", f"${total_val:,.0f}")
     c2.metric("Model R²", f"{r2:.1%}")
-    c3.metric("Model", port_data.get("modelName", model))
 
     exposures = port_data.get("exposures", [])
     if not exposures:
@@ -228,7 +221,7 @@ with tab4:
     with st.spinner("Loading factor returns..."):
         try:
             intraday = fetch_factor_returns_intraday()
-            port_data2 = fetch_portfolio_exposures(holdings_tuple, model=model)
+            port_data2 = fetch_portfolio_exposures(holdings_tuple)
         except Exception as e:
             st.error(f"Could not load factor returns: {e}")
             st.stop()
@@ -315,7 +308,7 @@ with tab5:
     with st.spinner("Computing risk attribution..."):
         try:
             cov_data = fetch_factor_covariance()
-            port_data3 = fetch_portfolio_exposures(holdings_tuple, model=model)
+            port_data3 = fetch_portfolio_exposures(holdings_tuple)
         except Exception as e:
             st.error(f"Could not load risk data: {e}")
             st.stop()

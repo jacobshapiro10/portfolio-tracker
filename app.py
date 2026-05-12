@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from data import (
     fetch_prices,
     compute_returns,
+    compute_trade_metrics,
+    compute_portfolio_pnl_series,
     get_sector_info,
     fetch_portfolio_exposures,
     fetch_factor_returns,
@@ -22,26 +24,29 @@ st.caption("Understand what's driving your portfolio — by sector, factor, and 
 # --- Sidebar ---
 with st.sidebar:
     st.header("Portfolio")
-    st.caption("Format: TICKER or TICKER:SHARES (default 100 shares)")
-    default_input = "AAPL:100, MSFT:50, XOM:75, JPM:60, LYB:80, CF:40, DOW:90"
-    raw_input = st.text_area("Holdings", value=default_input, height=140)
+    st.caption("Format: TICKER, TICKER:SHARES, or TICKER:SHARES:ENTRY_DATE  |  negative shares = short")
+    default_input = "AAPL:100:2025-01-15, MSFT:50:2025-03-10, XOM:75:2024-11-01, JPM:60:2025-02-20, LYB:-80:2024-12-15, CF:40:2025-04-01, DOW:90:2025-01-30"
+    raw_input = st.text_area("Holdings", value=default_input, height=160)
 
     holdings: dict[str, float] = {}
+    entry_dates: dict[str, str] = {}
     for item in raw_input.split(","):
         item = item.strip().upper()
         if not item:
             continue
-        if ":" in item:
-            ticker, _, qty = item.partition(":")
+        parts = [p.strip() for p in item.split(":")]
+        ticker = parts[0]
+        if not ticker:
+            continue
+        shares = 100.0
+        if len(parts) >= 2:
             try:
-                shares = float(qty.strip())
+                shares = float(parts[1])
             except ValueError:
-                shares = 100.0
-        else:
-            ticker, shares = item, 100.0
-        ticker = ticker.strip()
-        if ticker:
-            holdings[ticker] = shares
+                pass
+        if len(parts) >= 3 and parts[2]:
+            entry_dates[ticker] = parts[2]
+        holdings[ticker] = shares
 
     tickers = list(holdings.keys())
 
@@ -53,8 +58,12 @@ if not st.session_state.get("run"):
     st.stop()
 
 # --- Fetch price data ---
+earliest_entry = None
+if entry_dates:
+    earliest_entry = min(pd.to_datetime(d) for d in entry_dates.values()).strftime("%Y-%m-%d")
+
 with st.spinner("Fetching price data..."):
-    prices = fetch_prices(tickers)
+    prices = fetch_prices(tickers, start_date=earliest_entry)
     sector_info = get_sector_info(tickers)
 
 if prices.empty:
@@ -66,10 +75,11 @@ if not available:
     st.error("None of your tickers returned data.")
     st.stop()
 
-holdings_tuple = tuple((t, holdings[t]) for t in available)
+holdings_tuple = tuple((t, abs(holdings[t])) for t in available)
+trades = [{"ticker": t, "shares": holdings[t], "entry_date": entry_dates.get(t)} for t in available]
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Returns", "Sector Breakdown", "Factor Exposures", "Today's Drivers", "Risk Attribution"
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Returns", "Sector Breakdown", "Factor Exposures", "Today's Drivers", "Risk Attribution", "Trade P&L"
 ])
 
 # ============================================================
@@ -416,3 +426,122 @@ with tab5:
             }, na_rep="—"),
             use_container_width=True,
         )
+
+# ============================================================
+# TAB 6: Trade P&L
+# ============================================================
+with tab6:
+    st.subheader("Trade P&L")
+    st.caption("Tracks each position from its entry date. Negative shares = short.")
+
+    dated_trades = [t for t in trades if t.get("entry_date")]
+    if not dated_trades:
+        st.info("Add an entry date to your holdings (TICKER:SHARES:YYYY-MM-DD) to see P&L analysis.")
+        st.stop()
+
+    trade_df = compute_trade_metrics(prices, trades)
+    if trade_df.empty:
+        st.warning("Could not compute trade metrics.")
+        st.stop()
+
+    dated_df = trade_df[trade_df["Entry Date"].notna() & trade_df["P&L ($)"].notna()].copy()
+
+    # --- Summary metrics ---
+    total_pnl = dated_df["P&L ($)"].sum()
+    winners = (dated_df["P&L ($)"] > 0).sum()
+    win_rate = winners / len(dated_df) if len(dated_df) > 0 else 0
+    best = dated_df.loc[dated_df["P&L ($)"].idxmax()] if not dated_df.empty else None
+    worst = dated_df.loc[dated_df["P&L ($)"].idxmin()] if not dated_df.empty else None
+    n_long = (dated_df["Direction"] == "Long").sum()
+    n_short = (dated_df["Direction"] == "Short").sum()
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total P&L", f"${total_pnl:+,.0f}")
+    col2.metric("Win Rate", f"{win_rate:.0%}", f"{winners}/{len(dated_df)} positions")
+    col3.metric("Long / Short", f"{n_long} / {n_short}")
+    if best is not None:
+        col4.metric("Best Position", best["Ticker"], f"${best['P&L ($)']:+,.0f}")
+    if worst is not None:
+        col5.metric("Worst Position", worst["Ticker"], f"${worst['P&L ($)']:+,.0f}")
+
+    # --- Trade metrics table ---
+    st.subheader("Position Detail")
+
+    def color_pnl(val):
+        if pd.isna(val) or val == 0:
+            return ""
+        return f"color: {'#1a9641' if val > 0 else '#d7191c'}; font-weight: bold"
+
+    display_df = trade_df.set_index("Ticker")
+    st.dataframe(
+        display_df.style
+            .map(color_pnl, subset=["P&L ($)", "Return (%)", "Ann. Return (%)"])
+            .map(lambda v: "color: #d7191c; font-weight: bold" if isinstance(v, (int, float)) and not pd.isna(v) and v < 0 else ("color: #1a9641; font-weight: bold" if isinstance(v, (int, float)) and not pd.isna(v) and v < -5 else ""), subset=["Max Adverse Move (%)"])
+            .format({
+                "Entry Price": "${:.2f}",
+                "Current Price": "${:.2f}",
+                "P&L ($)": "${:+,.2f}",
+                "Return (%)": "{:+.2f}%",
+                "Ann. Return (%)": "{:+.1f}%",
+                "Days Held": "{:.0f}",
+                "Max Adverse Move (%)": "{:+.2f}%",
+            }, na_rep="—"),
+        use_container_width=True,
+    )
+
+    # --- Portfolio cumulative P&L chart ---
+    pnl_series = compute_portfolio_pnl_series(prices, trades)
+    if not pnl_series.empty and "Total" in pnl_series.columns:
+        st.subheader("Portfolio Cumulative P&L Over Time")
+        fig_total = go.Figure()
+        fig_total.add_trace(go.Scatter(
+            x=pnl_series.index, y=pnl_series["Total"],
+            mode="lines", name="Total P&L",
+            line=dict(width=2.5, color="#2196F3"),
+            fill="tozeroy",
+            fillcolor="rgba(33,150,243,0.12)",
+        ))
+        fig_total.add_hline(y=0, line_dash="dot", line_color="gray")
+        fig_total.update_layout(
+            yaxis_title="Unrealized P&L ($)", xaxis_title=None,
+            hovermode="x unified", height=380,
+        )
+        fig_total.update_yaxes(tickprefix="$", tickformat=",.0f")
+        st.plotly_chart(fig_total, use_container_width=True)
+
+        # --- Per-position P&L chart ---
+        st.subheader("P&L by Position")
+        position_cols = [c for c in pnl_series.columns if c != "Total"]
+        if position_cols:
+            fig_pos = go.Figure()
+            for col in position_cols:
+                direction = holdings.get(col, 1)
+                color = "#1a9641" if direction >= 0 else "#d7191c"
+                fig_pos.add_trace(go.Scatter(
+                    x=pnl_series.index, y=pnl_series[col],
+                    mode="lines", name=col,
+                    line=dict(width=1.8),
+                ))
+            fig_pos.add_hline(y=0, line_dash="dot", line_color="gray")
+            fig_pos.update_layout(
+                yaxis_title="Unrealized P&L ($)", xaxis_title=None,
+                hovermode="x unified", height=420,
+            )
+            fig_pos.update_yaxes(tickprefix="$", tickformat=",.0f")
+            st.plotly_chart(fig_pos, use_container_width=True)
+
+    # --- Return % since entry bar chart ---
+    if not dated_df.empty:
+        st.subheader("Return Since Entry by Position")
+        fig_ret = px.bar(
+            dated_df.sort_values("Return (%)"),
+            x="Return (%)", y="Ticker", orientation="h",
+            color="Return (%)",
+            color_continuous_scale=["#d7191c", "#f7f7f7", "#1a9641"],
+            color_continuous_midpoint=0,
+            text=dated_df.sort_values("Return (%)")["Return (%)"].map(lambda v: f"{v:+.1f}%"),
+        )
+        fig_ret.add_vline(x=0, line_dash="dot", line_color="gray")
+        fig_ret.update_layout(showlegend=False, coloraxis_showscale=False, height=max(300, 40 * len(dated_df)))
+        fig_ret.update_traces(textposition="outside")
+        st.plotly_chart(fig_ret, use_container_width=True)

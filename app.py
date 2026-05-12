@@ -493,9 +493,30 @@ with tab6:
     pnl_series = compute_portfolio_pnl_series(prices, trades)
     if not pnl_series.empty and "Total" in pnl_series.columns:
         st.subheader("Portfolio Cumulative P&L Over Time")
+        spy_prices = prices["SPY"].dropna()
+        spy_from_start = spy_prices[spy_prices.index >= pnl_series.index[0]]
+
+        # SPY equivalent: per trade, use signed notional (negative for shorts) from each entry date.
+        # This means a short position benchmarks against a short SPY, not a long one.
+        spy_equiv = pd.Series(0.0, index=pnl_series.index)
+        for trade in dated_trades:
+            tk = trade["ticker"]
+            entry_dt = pd.to_datetime(trade["entry_date"])
+            if tk not in prices.columns:
+                continue
+            tk_series = prices[tk].dropna()
+            tk_from_entry = tk_series[tk_series.index >= entry_dt]
+            spy_from_entry = spy_prices[spy_prices.index >= entry_dt]
+            if tk_from_entry.empty or spy_from_entry.empty:
+                continue
+            entry_price = float(tk_from_entry.iloc[0])
+            spy_entry_price = float(spy_from_entry.iloc[0])
+            signed_cost = trade["shares"] * entry_price  # negative for shorts
+            position_spy_pnl = signed_cost * (spy_from_entry / spy_entry_price - 1)
+            spy_equiv = spy_equiv.add(position_spy_pnl, fill_value=0)
+
         cost_basis = (dated_df["Entry Price"] * dated_df["Shares"]).sum()
-        spy_raw = prices["SPY"].dropna()
-        spy_from_start = spy_raw[spy_raw.index >= pnl_series.index[0]]
+
         fig_total = go.Figure()
         fig_total.add_trace(go.Scatter(
             x=pnl_series.index, y=pnl_series["Total"],
@@ -504,10 +525,9 @@ with tab6:
             fill="tozeroy",
             fillcolor="rgba(33,150,243,0.12)",
         ))
-        if not spy_from_start.empty and cost_basis > 0:
-            spy_pnl = cost_basis * (spy_from_start / spy_from_start.iloc[0] - 1)
+        if not spy_equiv.empty:
             fig_total.add_trace(go.Scatter(
-                x=spy_pnl.index, y=spy_pnl,
+                x=spy_equiv.index, y=spy_equiv,
                 mode="lines", name="S&P 500 (equiv.)",
                 line=dict(width=2, color="#FF9800", dash="dot"),
             ))
@@ -521,10 +541,10 @@ with tab6:
 
         # --- Portfolio % return vs SPY ---
         st.subheader("Portfolio Return vs S&P 500")
-        if cost_basis > 0:
+        if cost_basis > 0 and not spy_equiv.empty:
             port_pct = (pnl_series["Total"] / cost_basis * 100).rename("Portfolio")
-            if not spy_from_start.empty:
-                spy_pct = ((spy_from_start / spy_from_start.iloc[0]) - 1) * 100
+            if True:
+                spy_pct = (spy_equiv / cost_basis * 100)
                 spy_pct.name = "S&P 500"
                 comparison = pd.concat([port_pct, spy_pct], axis=1).dropna(how="all")
                 fig_vs = go.Figure()

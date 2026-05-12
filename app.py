@@ -493,29 +493,36 @@ with tab6:
     pnl_series = compute_portfolio_pnl_series(prices, trades)
     if not pnl_series.empty and "Total" in pnl_series.columns:
         st.subheader("Portfolio Cumulative P&L Over Time")
+        cost_basis = (dated_df["Entry Price"] * dated_df["Shares"]).sum()
+        spy_raw = prices["SPY"].dropna()
+        spy_from_start = spy_raw[spy_raw.index >= pnl_series.index[0]]
         fig_total = go.Figure()
         fig_total.add_trace(go.Scatter(
             x=pnl_series.index, y=pnl_series["Total"],
-            mode="lines", name="Total P&L",
+            mode="lines", name="Portfolio",
             line=dict(width=2.5, color="#2196F3"),
             fill="tozeroy",
             fillcolor="rgba(33,150,243,0.12)",
         ))
+        if not spy_from_start.empty and cost_basis > 0:
+            spy_pnl = cost_basis * (spy_from_start / spy_from_start.iloc[0] - 1)
+            fig_total.add_trace(go.Scatter(
+                x=spy_pnl.index, y=spy_pnl,
+                mode="lines", name="S&P 500 (equiv.)",
+                line=dict(width=2, color="#FF9800", dash="dot"),
+            ))
         fig_total.add_hline(y=0, line_dash="dot", line_color="gray")
         fig_total.update_layout(
             yaxis_title="Unrealized P&L ($)", xaxis_title=None,
-            hovermode="x unified", height=380,
+            hovermode="x unified", height=400,
         )
         fig_total.update_yaxes(tickprefix="$", tickformat=",.0f")
         st.plotly_chart(fig_total, use_container_width=True)
 
         # --- Portfolio % return vs SPY ---
         st.subheader("Portfolio Return vs S&P 500")
-        cost_basis = (dated_df["Entry Price"] * dated_df["Shares"]).sum()
         if cost_basis > 0:
             port_pct = (pnl_series["Total"] / cost_basis * 100).rename("Portfolio")
-            spy_raw = prices["SPY"].dropna()
-            spy_from_start = spy_raw[spy_raw.index >= pnl_series.index[0]]
             if not spy_from_start.empty:
                 spy_pct = ((spy_from_start / spy_from_start.iloc[0]) - 1) * 100
                 spy_pct.name = "S&P 500"

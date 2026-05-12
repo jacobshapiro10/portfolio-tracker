@@ -489,7 +489,7 @@ with tab6:
         use_container_width=True,
     )
 
-    # --- Portfolio cumulative P&L chart ---
+    # --- Portfolio cumulative P&L chart + SPY comparison ---
     pnl_series = compute_portfolio_pnl_series(prices, trades)
     if not pnl_series.empty and "Total" in pnl_series.columns:
         st.subheader("Portfolio Cumulative P&L Over Time")
@@ -508,6 +508,48 @@ with tab6:
         )
         fig_total.update_yaxes(tickprefix="$", tickformat=",.0f")
         st.plotly_chart(fig_total, use_container_width=True)
+
+        # --- Portfolio % return vs SPY ---
+        st.subheader("Portfolio Return vs S&P 500")
+        cost_basis = (dated_df["Entry Price"] * dated_df["Shares"]).sum()
+        if cost_basis > 0:
+            port_pct = (pnl_series["Total"] / cost_basis * 100).rename("Portfolio")
+            spy_raw = prices["SPY"].dropna()
+            spy_from_start = spy_raw[spy_raw.index >= pnl_series.index[0]]
+            if not spy_from_start.empty:
+                spy_pct = ((spy_from_start / spy_from_start.iloc[0]) - 1) * 100
+                spy_pct.name = "S&P 500"
+                comparison = pd.concat([port_pct, spy_pct], axis=1).dropna(how="all")
+                fig_vs = go.Figure()
+                fig_vs.add_trace(go.Scatter(
+                    x=comparison.index, y=comparison["Portfolio"],
+                    mode="lines", name="Portfolio",
+                    line=dict(width=2.5, color="#2196F3"),
+                ))
+                fig_vs.add_trace(go.Scatter(
+                    x=comparison.index, y=comparison["S&P 500"],
+                    mode="lines", name="S&P 500",
+                    line=dict(width=2, color="#FF9800", dash="dot"),
+                ))
+                fig_vs.add_hline(y=0, line_dash="dot", line_color="gray")
+                final_port = comparison["Portfolio"].dropna().iloc[-1] if not comparison["Portfolio"].dropna().empty else 0
+                final_spy = comparison["S&P 500"].dropna().iloc[-1] if not comparison["S&P 500"].dropna().empty else 0
+                alpha = final_port - final_spy
+                fig_vs.update_layout(
+                    yaxis_title="Return (%)", xaxis_title=None,
+                    hovermode="x unified", height=400,
+                    annotations=[dict(
+                        xref="paper", yref="paper", x=1, y=1,
+                        xanchor="right", yanchor="top",
+                        text=f"Alpha vs SPY: <b>{alpha:+.1f}pp</b>",
+                        showarrow=False,
+                        font=dict(size=13, color="#1a9641" if alpha >= 0 else "#d7191c"),
+                        bgcolor="rgba(255,255,255,0.8)",
+                        bordercolor="lightgray", borderwidth=1,
+                    )],
+                )
+                fig_vs.update_yaxes(ticksuffix="%")
+                st.plotly_chart(fig_vs, use_container_width=True)
 
         # --- Per-position P&L chart ---
         st.subheader("P&L by Position")
